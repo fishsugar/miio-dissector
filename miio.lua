@@ -1,3 +1,5 @@
+local md5_lib = require 'libs/md5' -- from https://github.com/kikito/md5.lua
+
 local p_miio = Proto("miio", "Xiaomi Mi Home Binary Protocol")
 p_miio.prefs.token = Pref.string("Device token", "", "128-bit device token (in hex)")
 
@@ -12,19 +14,52 @@ local f_decrypted_data = ProtoField.string("miio.data", "Data")
 p_miio.fields = { f_magic, f_length, f_unknown, f_deviceId, f_ts, f_checksum, f_encryptd_data, f_decrypted_data }
 
 local function md5(str)
-  local f = io.popen(string.format("echo '%s' | xxd -r -p - | openssl md5", str))
-  local result = f:read("*a")
-  result = string.gsub(result, "\n", "")
-  f:close()
-  return result
+  local b = ByteArray.new(str):raw()
+  return md5_lib.sumhexa(b)
+end
+
+local function remove_padding(decrypted_ba)
+  -- PKCS#7 Padding
+  local BLOCK_SIZE = 16
+  local len = decrypted_ba:len()
+
+  -- 1. Check if the length is a multiple of the block size (it should be)
+  if (len % BLOCK_SIZE ~= 0) then
+    -- Handle error: Decryption failed or data is corrupted
+    warn("Decrypted data length is not a multiple of block size!")
+    return decrypted_ba
+  end
+
+  -- 2. Read the value of the *last* byte, which tells you the padding length (P).
+  local padding_length = decrypted_ba:get_index(len - 1)
+
+  -- 3. Validate the padding length
+  if (padding_length < 1 or padding_length > BLOCK_SIZE) then
+    -- Handle error: Padding length is invalid. This is often an indication
+    -- that the wrong key was used (a "padding oracle" failure).
+    warn("PKCS#7 padding length is invalid: " .. padding_length)
+    return decrypted_ba
+  end
+
+  -- 4. (Optional but recommended) Verify all padding bytes have the correct value
+  for i = 1, padding_length do
+    -- Check byte at index (len - i)
+    if (decrypted_ba:get_index(len - i) ~= padding_length) then
+        warn("PKCS#7 padding validation failed at byte " .. i)
+        return decrypted_ba
+    end
+  end
+
+  -- 5. Strip the padding.
+  return decrypted_ba:subset(0, len - padding_length)
 end
 
 local function aes_128_cbc_decrypt(data, key, iv)
-  local f = io.popen(string.format("echo '%s' | xxd -r -p - | openssl aes-128-cbc -d -K '%s' -iv '%s'", data:tohex(), key, iv))
-  local result = f:read("*a")
-  result = string.gsub(result, "\n", "")
-  f:close()
-  return result
+  local cipher = GcryptCipher.open(GCRY_CIPHER_AES, GCRY_CIPHER_MODE_CBC, 0)
+  cipher:setkey(ByteArray.new(key))
+  cipher:setiv(ByteArray.new(iv))
+  local decrypted = cipher:decrypt(nil, data)
+  return remove_padding(decrypted):raw()
 end
 
 local function miio_dissector(buf, pkt, root)

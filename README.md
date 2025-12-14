@@ -3,17 +3,11 @@ Xiaomi Mi Home Binary Protocol Dissector for Wireshark.
 
 # Requirements
 
-- macOS (Windows not available, Linux not tested)
-- openssl installed
+- Wireshark 4.6.0 or above
 
 # Install
 
-Copy the [miio.lua](https://raw.githubusercontent.com/0x5e/miio-dissector/main/miio.lua) file to `~/.config/wireshark/plugins/miio.lua`.
-
-Or execute:
-```shell
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/0x5e/miio-dissector/main/install.sh)"
-```
+Copy [miio.lua](miio.lua) and [libs/](libs) to [Wireshark plugin folder](https://www.wireshark.org/docs/wsug_html_chunked/ChPluginFolders.html).
 
 # Usage
 After installation, restart the Wireshark, open `Preferences` -> `Protocols` -> `MIIO` page, input the device token and save.
