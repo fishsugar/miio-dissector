@@ -13,6 +13,14 @@ local f_encryptd_data = ProtoField.bytes("miio.encryptd_data", "Encrypted data")
 local f_decrypted_data = ProtoField.string("miio.data", "Data")
 p_miio.fields = { f_magic, f_length, f_unknown, f_deviceId, f_ts, f_checksum, f_encryptd_data, f_decrypted_data }
 
+local ef_unknown_payload_encoding = ProtoExpert.new(
+  "miio.unknown_payload_encoding",
+  "Unknown payload encoding",
+  expert.group.DECRYPTION,
+  expert.severity.WARN
+)
+p_miio.experts = { ef_unknown_payload_encoding }
+
 local function md5(str)
   local b = ByteArray.new(str):raw()
   return md5_lib.sumhexa(b)
@@ -59,7 +67,7 @@ local function aes_128_cbc_decrypt(data, key, iv)
   cipher:setkey(ByteArray.new(key))
   cipher:setiv(ByteArray.new(iv))
   local decrypted = cipher:decrypt(nil, data)
-  return remove_padding(decrypted):raw()
+  return remove_padding(decrypted)
 end
 
 local function miio_dissector(buf, pkt, root)
@@ -69,7 +77,7 @@ local function miio_dissector(buf, pkt, root)
   if magic:uint() ~= 0x2131 then return false end
 
   local len = buf(2, 2)
-  if buf:len() ~= len:uint() then return false end
+  if buf:len() < len:uint() then return false end
 
   pkt.cols.protocol = "MIIO"
 
@@ -78,7 +86,7 @@ local function miio_dissector(buf, pkt, root)
   local ts = buf(12, 4)
   local checksum = buf(16, 16)
 
-  local t = root:add(p_miio, buf)
+  local t = root:add(p_miio, buf(0, len:uint()))
   if len:uint() == 32 then
     if deviceId:uint() == 0xffffffff then
       pkt.cols.info = "Hello"
@@ -102,8 +110,18 @@ local function miio_dissector(buf, pkt, root)
       local iv = md5(string.format("%s%s", key, token))
       local decrypted_data = aes_128_cbc_decrypt(data:bytes(), key, iv)
       -- TODO trim && check valid
-      pkt.cols.info = decrypted_data
-      t:add(f_decrypted_data, data, decrypted_data)
+      local decrypted_data_tvb = decrypted_data:tvb("Decrypted Data")
+      t:add(f_decrypted_data, decrypted_data_tvb:range(), "", string.format("Data: %d bytes", decrypted_data:len()))
+
+      if decrypted_data:get_index(0) == string.byte('{') then
+        Dissector.get("json"):call(decrypted_data_tvb, pkt, root)
+        pkt.cols.info = decrypted_data:raw()
+      else
+        pkt.cols.info = "MIIO: Unknown payload encoding"
+        t:add_proto_expert_info(ef_unknown_payload_encoding)
+        local data_dis = Dissector.get("data")
+        data_dis:call(decrypted_data_tvb, pkt, root)
+      end
     else
       t:add(f_encryptd_data, data)
     end
