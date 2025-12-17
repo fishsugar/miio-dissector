@@ -1,7 +1,13 @@
 local md5_lib = require 'libs/md5' -- from https://github.com/kikito/md5.lua
 
 local p_miio = Proto("miio", "Xiaomi Mi Home Binary Protocol")
-p_miio.prefs.token = Pref.string("Device token", "", "128-bit device token (in hex)")
+
+local fieldlist = {
+  {"Device ID", "Device ID (decimal or hex started with 0x)"},
+  {"Token", "128-bit device token (in hex)"},
+}
+p_miio.prefs.device_tokens = Pref.uat("Miio device tokens", fieldlist, "Miio device tokens", "miio_device_tokens")
+
 
 local f_magic = ProtoField.uint16("miio.magic", "Magic", base.HEX)
 local f_length = ProtoField.uint16("miio.length", "Length", base.DEC)
@@ -20,6 +26,22 @@ local ef_unknown_payload_encoding = ProtoExpert.new(
   expert.severity.WARN
 )
 p_miio.experts = { ef_unknown_payload_encoding }
+
+local token_map = {}
+local function rebuild_token_map()
+  token_map = {}
+  for _, row in ipairs(p_miio.prefs.device_tokens) do
+    local device_id = tonumber(row[1])
+    local token = row[2]
+    token_map[device_id] = token
+  end
+end
+local function get_token(device_id)
+  return token_map[device_id]
+end
+function p_miio.init()
+  rebuild_token_map()
+end
 
 local function md5(str)
   local b = ByteArray.new(str):raw()
@@ -104,7 +126,7 @@ local function miio_dissector(buf, pkt, root)
 
   if len:uint() > 32 then
     local data = buf(32, len:uint() - 32)
-    local token = p_miio.prefs.token
+    local token = get_token(deviceId:uint())
     if (token ~= nil and token ~= "") then
       local key = md5(token)
       local iv = md5(string.format("%s%s", key, token))
