@@ -92,6 +92,12 @@ local function aes_128_cbc_decrypt(data, key, iv)
   return remove_padding(decrypted)
 end
 
+local function set_col_info(pkt, text)
+  pkt.cols.info:clear()
+  pkt.cols.info:append(text, ", ")
+  pkt.cols.info:fence()
+end
+
 local function miio_dissector(buf, pkt, root)
   if buf:len() < 32 then return false end
 
@@ -111,9 +117,9 @@ local function miio_dissector(buf, pkt, root)
   local t = root:add(p_miio, buf(0, len:uint()))
   if len:uint() == 32 then
     if deviceId:uint() == 0xffffffff then
-      pkt.cols.info = "Hello"
+      set_col_info(pkt, "Hello")
     else
-      pkt.cols.info = "Hello Ack"
+      set_col_info(pkt, "Hello Ack")
     end
   end
 
@@ -137,9 +143,9 @@ local function miio_dissector(buf, pkt, root)
 
       if decrypted_data:get_index(0) == string.byte('{') then
         Dissector.get("json"):call(decrypted_data_tvb, pkt, root)
-        pkt.cols.info = decrypted_data:raw()
+        set_col_info(pkt, decrypted_data:raw())
       else
-        pkt.cols.info = "MIIO: Unknown payload encoding"
+        set_col_info(pkt, "MIIO: Unknown payload encoding")
         t:add_proto_expert_info(ef_unknown_payload_encoding)
         local data_dis = Dissector.get("data")
         data_dis:call(decrypted_data_tvb, pkt, root)
@@ -149,17 +155,21 @@ local function miio_dissector(buf, pkt, root)
     end
   end
 
-  return true
+  return len:uint()
 end
 
-
-local data_dis = Dissector.get("data")
 function p_miio.dissector(buf, pkt, root)
-  if miio_dissector(buf, pkt, root) then
-    --valid MIIO diagram
-  else
-    data_dis:call(buf, pkt, root)
-  end
+    local offset = 0
+    local total_len = buf:len()
+
+    while offset < total_len do
+      local pdu_len = miio_dissector(buf(offset), pkt, root)
+      if not pdu_len then
+        break
+      end
+
+      offset = offset + pdu_len
+    end
 end
 
 local udp_encap_table = DissectorTable.get("udp.port")
